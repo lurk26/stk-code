@@ -118,6 +118,11 @@ void BattleAI::reset()
  */
 void BattleAI::update(float dt)
 {
+    if (m_world->getCurrentNumPlayers() == 0)
+    {
+        reset();
+        return;
+    }
     handleAcceleration(dt);
     handleSteering(dt);
 	handleItems(dt);
@@ -173,17 +178,17 @@ void BattleAI::handleSteering(const float dt)
     PlayerController* pcontroller = (PlayerController*)kart->getController();
 	
 	int player_node = pcontroller->getCurrentNode();    
-     std::cout<<"PLayer node " << player_node<<" This cpu kart node" << m_current_node<<std::endl;
+    // std::cout<<"PLayer node " << player_node<<" This cpu kart node" << m_current_node<<std::endl;
     
     if(player_node == BattleGraph::UNKNOWN_POLY || m_current_node == BattleGraph::UNKNOWN_POLY) return;
     m_target_node   =   player_node;
 	m_target_point = kart->getXYZ();
 
-	//handleItemCollection(&m_target_point, &m_target_node);
+	handleItemCollection(&m_target_point, &m_target_node);
 	m_debug_sphere->setPosition(m_target_point.toIrrVector());
     if(m_target_node == m_current_node)
     {
-        m_target_point=kart->getXYZ();  
+    //    m_target_point=kart->getXYZ();  
     //  std::cout<<"Aiming at sire nixt\n";
     }
     else
@@ -198,7 +203,7 @@ void BattleAI::handleSteering(const float dt)
         stringPull(m_kart->getXYZ(),m_target_point);
         if(m_path_corners.size()>0)  
         {
-                m_debug_sphere->setPosition(m_path_corners[0].toIrrVector());
+                //m_debug_sphere->setPosition(m_path_corners[0].toIrrVector());
                 m_target_point = m_path_corners.front();
         }
         else 
@@ -431,9 +436,10 @@ void BattleAI::handleBraking()
     
     float current_curve_radius = BattleAI::determineTurnRadius(points);
 
+    //Hack to make the kart go slower when it approaches its target
 	Vec3 d1 = m_kart->getXYZ() - m_target_point; Vec3 d2 = m_kart->getXYZ() - m_path_corners[0];
 	if (d1.length2_2d() < d2.length2_2d())
-		current_curve_radius = d1.length_2d();
+		current_curve_radius = d1.length_2d()/1.2f;
 
     //std::cout<<"\n Radius: " << current_curve_radius;
     float max_turn_speed =
@@ -546,23 +552,51 @@ float BattleAI::isStuck(const float dt)
 
 void BattleAI::handleItems(const float dt)
 {
-	m_controls->m_fire = true;
+    m_controls->m_fire = false;
+    if (m_kart->getPowerup()->getType() != PowerupManager::POWERUP_BOWLING &&
+        m_kart->getPowerup()->getType() != PowerupManager::POWERUP_CAKE &&
+        m_kart->getPowerup()->getType() != PowerupManager::POWERUP_SWATTER &&
+        m_kart->getPowerup()->getType() != PowerupManager::POWERUP_NOTHING)
+    {
+        m_controls->m_fire = true;
+        return;
+    }
+
+    if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_BOWLING)
+    {
+        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        m_controls->m_fire = ((distance < 10.0f) );
+           
+    }
+    else if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_CAKE)
+    {
+        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        m_controls->m_fire = ((distance < 15.0f));
+    }
+    else if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_SWATTER)
+    {
+        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        m_controls->m_fire = ((distance < 3.0f));
+    }
+
+	
 }
 
 
 void BattleAI::handleItemCollection(Vec3 *aim_point, int* target_node)
 {
-	if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_BOWLING) return;
+    std::cout << m_kart->getPowerup()->getType()<<std::endl;
+	if (m_kart->getPowerup()->getType() != PowerupManager::POWERUP_NOTHING) return;
 	Vec3 old_aim_point = *aim_point;
 
-	float distance = 5.0f;
+	float distance = 1.0f;
 	bool found_suitable_item = false;
 	const std::vector< std::pair<Item*, int> >& item_list =
 		BattleGraph::get()->getItemList();
 	int items_count = item_list.size();
 
 	
-	for (unsigned int j = 0; j < 50; j++)
+	for (unsigned int j = 0; j < 50 && !found_suitable_item; j++)
 		{
 			for (unsigned int i = 0; i < items_count; ++i)
 			{
@@ -570,17 +604,18 @@ void BattleAI::handleItemCollection(Vec3 *aim_point, int* target_node)
 				Vec3 d = item->getXYZ() - m_kart->getXYZ();
 				if (d.length_2d() <= distance)
 				{
-					if (item->getType() == Item::ITEM_BONUS_BOX && !item->wasCollected())
-					{
-						m_item_to_collect = item;
-						found_suitable_item = true;
-						*aim_point = item->getXYZ();
-						*target_node = item_list[i].second;
-						break;
-					}
+                    if (item->getType() == Item::ITEM_BONUS_BOX && !item->wasCollected())
+                    {
+                        m_item_to_collect = item;
+                        found_suitable_item = true;
+                        *aim_point = item->getXYZ();
+                        *target_node = item_list[i].second;
+                        return;
+                        break;
+                    }
 				}
 			}
-			distance = 2.0f * distance;
+			distance = distance + 2.0f;
 		}
 	
 
