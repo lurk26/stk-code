@@ -59,8 +59,14 @@ private:
     /** The target point. */
     Vec3 m_target_point;
 
+    /** The point kart is aimint at right now */
+    Vec3 m_aim_point;
+
     /** The steering angle required to reach the target point. */
     float m_target_angle;
+
+    /** The kart at which this AI is targetting */
+    AbstractKart* m_target_kart;
 
     /** Holds the set of portals that the kart will cross when moving through 
      *  polygon channel. See findPortals() */
@@ -88,6 +94,7 @@ private:
     void handleGetUnstuck(const float dt);   
 	void handleItems(const float dt);
 	void handleItemCollection(Vec3*, int*);
+    AbstractKart* determineTargetKart(AbstractKart* const current_target);
 
 protected:
 

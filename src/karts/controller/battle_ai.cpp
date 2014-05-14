@@ -64,7 +64,7 @@ BattleAI::BattleAI(AbstractKart *kart,
     #ifdef AI_DEBUG
     
         video::SColor col_debug(128, 128,0,0);
-        m_debug_sphere = irr_driver->addSphere(1.0f, col_debug);
+        m_debug_sphere = irr_driver->addSphere(0.5f, col_debug);
         m_debug_sphere->setVisible(true);
         //m_item_sphere  = irr_driver->addSphere(1.0f);
     #endif
@@ -105,9 +105,11 @@ void BattleAI::reset()
     m_next_node = BattleGraph::UNKNOWN_POLY;
     m_target_node = BattleGraph::UNKNOWN_POLY;
     m_target_point = Vec3(0,0,0);
+    m_aim_point = Vec3(0, 0, 0);
     m_target_angle = 0.0f;
     m_time_since_stuck = 0.0f;
     m_currently_reversing = false;
+    m_target_kart = NULL;
     AIBaseController::reset();
 }
 
@@ -169,23 +171,36 @@ void BattleAI::handleAcceleration( const float dt)
 //-----------------------------------------------------------------------------
 /** This function sets the steering.
  *  NOTE: The Battle AI is in development and currently this function is a
- *  sandbox for testing out the AI. It may actually be doing a lot more than 
+ *  sandbox for testing out the AI. The function may actually be doing a lot more than 
  *  just steering to a point, which means this function could be messy. 
  */
 void BattleAI::handleSteering(const float dt)
 {
     const AbstractKart* kart = m_world->getPlayerKart(0);
-    PlayerController* pcontroller = (PlayerController*)kart->getController();
-	
-	int player_node = pcontroller->getCurrentNode();    
+       
     // std::cout<<"PLayer node " << player_node<<" This cpu kart node" << m_current_node<<std::endl;
     
-    if(player_node == BattleGraph::UNKNOWN_POLY || m_current_node == BattleGraph::UNKNOWN_POLY) return;
-    m_target_node   =   player_node;
-	m_target_point = kart->getXYZ();
+    
+    m_target_kart = determineTargetKart(m_target_kart);
+    int kart_node;
+    Controller* target_kart_controller = m_target_kart->getController();
+    if (target_kart_controller->isPlayerController())
+    {
+        PlayerController* pcontroller = (PlayerController*)m_target_kart->getController();
+        kart_node = pcontroller->getCurrentNode();
+    }
+    else
+    {
+        BattleAI* aicontroller = (BattleAI*)m_target_kart->getController();
+        kart_node = aicontroller->getCurrentNode();
+    }
+    if(kart_node == BattleGraph::UNKNOWN_POLY || m_current_node == BattleGraph::UNKNOWN_POLY) return;
+
+    m_target_node   =   kart_node;
+	m_target_point = m_target_kart->getXYZ();
 
 	handleItemCollection(&m_target_point, &m_target_node);
-	m_debug_sphere->setPosition(m_target_point.toIrrVector());
+	//m_debug_sphere->setPosition(m_target_point.toIrrVector());
     if(m_target_node == m_current_node)
     {
     //    m_target_point=kart->getXYZ();  
@@ -204,7 +219,7 @@ void BattleAI::handleSteering(const float dt)
         if(m_path_corners.size()>0)  
         {
                 //m_debug_sphere->setPosition(m_path_corners[0].toIrrVector());
-                m_target_point = m_path_corners.front();
+                m_aim_point = m_path_corners.front();
         }
         else 
             {
@@ -213,7 +228,7 @@ void BattleAI::handleSteering(const float dt)
         //        target_point = m_path_corners[0];
     } 
 
-    m_target_angle = steerToPoint(m_target_point);
+    m_target_angle = steerToPoint(m_aim_point);
     // std::cout<<"Target nalge: "<<m_target_angle << "  normalized:"<<normalizeAngle(m_target_angle)<<std::endl;
     setSteering(m_target_angle,dt);
     
@@ -439,7 +454,7 @@ void BattleAI::handleBraking()
     //Hack to make the kart go slower when it approaches its target
 	Vec3 d1 = m_kart->getXYZ() - m_target_point; Vec3 d2 = m_kart->getXYZ() - m_path_corners[0];
 	if (d1.length2_2d() < d2.length2_2d())
-		current_curve_radius = d1.length_2d()/1.2f;
+		current_curve_radius = d1.length_2d()/1.4f;
 
     //std::cout<<"\n Radius: " << current_curve_radius;
     float max_turn_speed =
@@ -561,28 +576,73 @@ void BattleAI::handleItems(const float dt)
         m_controls->m_fire = true;
         return;
     }
-
+    
     if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_BOWLING)
     {
-        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
-        m_controls->m_fire = ((distance < 10.0f) );
-           
+        //float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        
+        float rect_width = m_kart_width * 5;
+        float rect_length = m_kart_length * 10;
+
+        Vec3 kart_loc = m_kart->getXYZ();
+        float heading = m_kart->getHeading();
+        Vec3 unit_vec_parallel = Vec3(sin(heading), kart_loc.getY(), cos(heading));
+        Vec3 unit_vec_perpendicular = Vec3(cos(heading), kart_loc.getY(), -1.0f*sin(heading));
+        Vec3 rect[6];
+        rect[0] = kart_loc + (0.5f*rect_width)*(-1.0f*unit_vec_perpendicular);
+        rect[1] = kart_loc + (0.5f*rect_width)*(unit_vec_perpendicular);
+        rect[2] = rect[1] + (rect_length)*(unit_vec_parallel);
+        rect[3] = rect[0] + (rect_length)*(unit_vec_parallel);
+        rect[4] = rect[1] + -1.5f*(rect_length)*(unit_vec_parallel);
+        rect[5] = rect[0] + -1.5f*(rect_length)*(unit_vec_parallel);
+     
+        // The location of the target kart.
+        Vec3 target_kart_loc = m_target_kart->getXYZ();
+                
+        bool fire_backwards;
+        bool inside_rect= true;
+
+        float side = target_kart_loc.sideOfLine2D(rect[0], rect[1]);
+        if (side > 0)
+        {
+            fire_backwards = false;
+            for (unsigned int i = 1; i < 4; i++)
+            {
+                if (target_kart_loc.sideOfLine2D(rect[i % 4], rect[(i + 1) % 4]) * side
+                    < 0)
+                    inside_rect = false;
+            }
+        }
+        else
+        {
+            fire_backwards = true;
+            if (target_kart_loc.sideOfLine2D(rect[1],rect[4]) > 0 ||
+                target_kart_loc.sideOfLine2D(rect[4], rect[5]) > 0 || 
+                target_kart_loc.sideOfLine2D(rect[5], rect[0]) > 0)
+                    inside_rect = false;
+            
+        }
+        
+        m_controls->m_fire = (inside_rect && target_kart_loc == m_target_point) ? true : false;
+        if(m_controls->m_fire)
+            m_controls->m_look_back = fire_backwards;
+                   
     }
     else if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_CAKE)
     {
-        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        float distance = (m_kart->getXYZ() - m_target_kart->getXYZ()).length_2d();
         m_controls->m_fire = ((distance < 15.0f));
     }
     else if (m_kart->getPowerup()->getType() == PowerupManager::POWERUP_SWATTER)
     {
-        float distance = (m_kart->getXYZ() - m_world->getPlayerKart(0)->getXYZ()).length_2d();
+        float distance = (m_kart->getXYZ() - m_target_kart->getXYZ()).length_2d();
         m_controls->m_fire = ((distance < 3.0f));
     }
 
 	
 }
 
-
+// This function is dirty.
 void BattleAI::handleItemCollection(Vec3 *aim_point, int* target_node)
 {
     std::cout << m_kart->getPowerup()->getType()<<std::endl;
@@ -619,4 +679,33 @@ void BattleAI::handleItemCollection(Vec3 *aim_point, int* target_node)
 		}
 	
 
+}
+
+AbstractKart* BattleAI::determineTargetKart( AbstractKart* const current_target)
+{
+    float currentKartDistance;
+    if (current_target != NULL)
+        currentKartDistance = (m_kart->getXYZ()).distance(current_target->getXYZ());
+    else
+        currentKartDistance =INFINITY;
+
+    for (unsigned int i = 0; i<m_world->getNumKarts(); i++)
+    {
+        AbstractKart *kart = m_world->getKart(i);
+        // If a kart has star effect shown, the kart is immune, so
+        // it is not considered a target anymore.
+        if (kart->isEliminated() || kart == m_kart ||
+            kart->isInvulnerable() ||
+            kart->getKartAnimation()) continue;
+       
+        float newKartDistance = (m_kart->getXYZ()).distance(kart->getXYZ());
+
+
+        if (abs(currentKartDistance - newKartDistance) > 10)
+        {
+            return kart;
+        }
+    }
+    return current_target;
+   
 }
