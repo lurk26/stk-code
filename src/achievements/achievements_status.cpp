@@ -26,7 +26,6 @@
 #include "utils/log.hpp"
 #include "utils/ptr_vector.hpp"
 #include "utils/translation.hpp"
-#include "online/current_user.hpp"
 
 #include <sstream>
 #include <fstream>
@@ -110,7 +109,7 @@ Achievement * AchievementsStatus::getAchievement(uint32_t id)
     if ( m_achievements.find(id) != m_achievements.end())
         return m_achievements[id];
     return NULL;
-}
+}   // getAchievement
 
 // ----------------------------------------------------------------------------
 void AchievementsStatus::sync(const std::vector<uint32_t> & achieved_ids)
@@ -121,7 +120,7 @@ void AchievementsStatus::sync(const std::vector<uint32_t> & achieved_ids)
         if(achievement != NULL)
             achievement->setAchieved();
     }
-}
+}   // sync
 
 // ----------------------------------------------------------------------------
 void AchievementsStatus::onRaceEnd()
@@ -131,4 +130,13 @@ void AchievementsStatus::onRaceEnd()
     for ( iter = m_achievements.begin(); iter != m_achievements.end(); ++iter ) {
         iter->second->onRaceEnd();
     }
-}
+}   // onRaceEnd
+
+void AchievementsStatus::onLapEnd()
+{
+    //reset all values that need to be reset
+    std::map<uint32_t, Achievement *>::iterator iter;
+    for (iter = m_achievements.begin(); iter != m_achievements.end(); ++iter) {
+        iter->second->onLapEnd();
+    }
+}   // onLapEnd

@@ -19,7 +19,7 @@
 
 #include "online/profile_manager.hpp"
 
-#include "online/current_user.hpp"
+#include "online/online_profile.hpp"
 #include "utils/log.hpp"
 #include "utils/translation.hpp"
 
@@ -82,7 +82,7 @@ int  ProfileManager::guaranteeCacheSize(unsigned int min_num)
  *  FIXME: This should be improved to download the profile is necessary.
  *  \param id The id of the profile to find.
  */
-Profile * ProfileManager::getProfileByID(const uint32_t id)
+OnlineProfile* ProfileManager::getProfileByID(const uint32_t id)
 {
     if (inPersistent(id))
         return m_profiles_persistent[id];
@@ -100,7 +100,7 @@ Profile * ProfileManager::getProfileByID(const uint32_t id)
 *  with any new information from the given profile. Otherwise, the profile
 *  is just added to the cache.
 */
-void ProfileManager::addToCache(Profile * profile)
+void ProfileManager::addToCache(OnlineProfile * profile)
 {
     if (inPersistent(profile->getID()))
         m_profiles_persistent[profile->getID()]->merge(profile);
@@ -118,12 +118,12 @@ void ProfileManager::addToCache(Profile * profile)
  *  the RaceResultGUI to leave the race running (for the end animation) while
  *  the results are being shown.
  */
-void ProfileManager::addDirectToCache(Profile* profile)
+void ProfileManager::addDirectToCache(OnlineProfile* profile)
 {
     assert(profile != NULL);
     if (m_profiles_cache.size() == m_max_cache_size)
     {
-        // We have to replace a cached entry, find one entry that 
+        // We have to replace a cached entry, find one entry that
         // doesn't have its used bit set
         ProfilesMap::iterator iter;
         for (iter = m_profiles_cache.begin(); iter != m_profiles_cache.end();)
@@ -168,7 +168,7 @@ bool ProfileManager::isInCache(const uint32_t id)
 *  probability that most often used entries will remain in the cache,
 *  without adding much overhead.
 */
-void ProfileManager::updateCacheBits(Profile * profile)
+void ProfileManager::updateCacheBits(OnlineProfile * profile)
 {
     profile->setCacheBit(true);
     if (m_profiles_cache.size() == m_max_cache_size)
@@ -202,13 +202,13 @@ bool ProfileManager::inPersistent(const uint32_t id)
 }   // inPersistent
 
 // ------------------------------------------------------------------------
-/** Adds a profile to the persistent map. If a profile with the same id 
+/** Adds a profile to the persistent map. If a profile with the same id
  *  is already in there, the profiles are "merged" with the goal to save as
  *  much information (i.e. one profile instance could have already fetched
  *  the friends, while the other could have fetched the achievements.)
  *  \param profile The profile to make persistent.
  */
-void ProfileManager::addPersistent(Profile * profile)
+void ProfileManager::addPersistent(OnlineProfile * profile)
 {
     if (inPersistent(profile->getID()))
     {
@@ -243,7 +243,7 @@ void ProfileManager::deleteFromPersistent(const uint32_t id)
 void ProfileManager::clearPersistent()
 {
     ProfilesMap::iterator it;
-    for (it  = m_profiles_persistent.begin(); 
+    for (it  = m_profiles_persistent.begin();
          it != m_profiles_persistent.end(); ++it)
     {
         delete it->second;
@@ -260,12 +260,12 @@ void ProfileManager::moveToCache(const uint32_t id)
 {
     if (inPersistent(id))
     {
-        Profile * profile = getProfileByID(id);
+        OnlineProfile * profile = getProfileByID(id);
         m_profiles_persistent.erase(id);
         addToCache(profile);
     }
     else
-        Log::warn("ProfileManager", 
+        Log::warn("ProfileManager",
                   "Tried to move profile with id %d from persistent to "
                   "cache while not present", id);
 }   // moveToCache

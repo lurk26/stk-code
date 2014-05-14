@@ -87,6 +87,8 @@ using namespace irr;
 /** singleton */
 IrrDriver *irr_driver = NULL;
 
+GPUTimer          m_perf_query[Q_LAST];
+
 const int MIN_SUPPORTED_HEIGHT = 600;
 const int MIN_SUPPORTED_WIDTH  = 800;
 
@@ -106,6 +108,7 @@ IrrDriver::IrrDriver()
     m_request_screenshot  = false;
     m_shaders             = NULL;
     m_rtts                = NULL;
+    m_post_processing     = NULL;
     m_wind                = new Wind();
     m_mipviz = m_wireframe = m_normals = m_ssaoviz = \
         m_lightviz = m_shadowviz = m_distortviz = 0;
@@ -124,7 +127,11 @@ IrrDriver::~IrrDriver()
     // instead we just decrease the ref count here. When the material
     // is deleted, it will trigger the actual deletion of
     // PostProcessing when decreasing the refcount of its callback object.
-    m_post_processing->drop();
+    if(m_post_processing)
+    {
+        // check if we createad the OpenGL device by calling initDevice()
+        m_post_processing->drop();
+    }
     assert(m_device != NULL);
 
     m_device->drop();
@@ -155,12 +162,17 @@ STKRenderingPass IrrDriver::getPhase() const
 
 void IrrDriver::IncreaseObjectCount()
 {
-	object_count[m_phase]++;
+    object_count[m_phase]++;
 }
 
 core::array<video::IRenderTarget> &IrrDriver::getMainSetup()
 {
   return m_mrt;
+}
+
+GPUTimer &IrrDriver::getGPUTimer(unsigned i)
+{
+    return m_perf_query[i];
 }
 
 // ----------------------------------------------------------------------------
@@ -422,12 +434,20 @@ void IrrDriver::initDevice()
     m_gui_env       = m_device->getGUIEnvironment();
     m_video_driver  = m_device->getVideoDriver();
 
-	int GLMajorVersion = 0, GLMinorVersion = 0;
-	glGetIntegerv(GL_MAJOR_VERSION, &GLMajorVersion);
+    GLMajorVersion = 2;
+    GLMinorVersion = 1;
+    glGetIntegerv(GL_MAJOR_VERSION, &GLMajorVersion);
     glGetIntegerv(GL_MINOR_VERSION, &GLMinorVersion);
     Log::info("IrrDriver", "OPENGL VERSION IS %d.%d", GLMajorVersion, GLMinorVersion);
-	m_glsl = (GLMajorVersion > 3 || (GLMajorVersion == 3 && GLMinorVersion == 3)) && UserConfigParams::m_pixel_shaders;
-                      
+    m_glsl = (GLMajorVersion > 3 || (GLMajorVersion == 3 && GLMinorVersion >= 1));
+
+    // Parse extensions
+    hasVSLayer = false;
+    const GLubyte *extensions = glGetString(GL_EXTENSIONS);
+    if (extensions && strstr((const char*)extensions, "GL_AMD_vertex_shader_layer") != NULL)
+        hasVSLayer = true;
+
+
 
     // This remaps the window, so it has to be done before the clear to avoid flicker
     m_device->setResizable(false);
@@ -455,10 +475,8 @@ void IrrDriver::initDevice()
 
         m_mrt.clear();
         m_mrt.reallocate(2);
-        m_mrt.push_back(m_rtts->getRTT(RTT_COLOR));
-        m_mrt.push_back(m_rtts->getRTT(RTT_NORMAL_AND_DEPTH));
 
-        irr::video::COpenGLDriver*	gl_driver = (irr::video::COpenGLDriver*)m_device->getVideoDriver();
+        irr::video::COpenGLDriver*    gl_driver = (irr::video::COpenGLDriver*)m_device->getVideoDriver();
         gl_driver->extGlGenQueries(1, &m_lensflare_query);
         m_query_issued = false;
 
@@ -595,7 +613,7 @@ core::position2di IrrDriver::getMouseLocation()
 bool IrrDriver::moveWindow(const int x, const int y)
 {
 #ifdef WIN32
-    const video::SExposedVideoData& videoData = 
+    const video::SExposedVideoData& videoData =
                     m_video_driver->getExposedVideoData();
     // this should work even if using DirectX in theory,
     // because the HWnd is always third pointer in the struct,
@@ -964,17 +982,17 @@ scene::ISceneNode *IrrDriver::addBillboard(const core::dimension2d< f32 > size,
                                            video::ITexture *texture,
                                            scene::ISceneNode* parent, bool alphaTesting)
 {
-	scene::IBillboardSceneNode* node;
-	if (isGLSL())
-	{
-		if (!parent)
-			parent = m_scene_manager->getRootSceneNode();
+    scene::IBillboardSceneNode* node;
+    if (isGLSL())
+    {
+        if (!parent)
+            parent = m_scene_manager->getRootSceneNode();
 
-		node = new STKBillboard(parent, m_scene_manager, -1, vector3df(0., 0., 0.), size);
-		node->drop();
-	}
-	else
-		node = m_scene_manager->addBillboardSceneNode(parent, size);
+        node = new STKBillboard(parent, m_scene_manager, -1, vector3df(0., 0., 0.), size);
+        node->drop();
+    }
+    else
+        node = m_scene_manager->addBillboardSceneNode(parent, size);
     assert(node->getMaterialCount() > 0);
     node->setMaterialTexture(0, texture);
     if(alphaTesting)
@@ -1150,7 +1168,7 @@ scene::ISceneNode *IrrDriver::addSkyDome(video::ITexture *texture,
                                          float texture_percent,
                                          float sphere_percent)
 {
-	Log::error("skybox", "Using deprecated SkyDome");
+    Log::error("skybox", "Using deprecated SkyDome");
     return m_scene_manager->addSkyDomeSceneNode(texture, hori_res, vert_res,
                                                 texture_percent,
                                                 sphere_percent);
@@ -1167,13 +1185,13 @@ scene::ISceneNode *IrrDriver::addSkyDome(video::ITexture *texture,
  *  \param front: Texture for the front plane of the box.
  *  \param back: Texture for the back plane of the box.
  */
-scene::ISceneNode *IrrDriver::addSkyBox(const std::vector<video::ITexture*>
-                                        &texture)
+scene::ISceneNode *IrrDriver::addSkyBox(const std::vector<video::ITexture*> &texture,
+    const std::vector<video::ITexture*> &sphericalHarmonics)
 {
     assert(texture.size() == 6);
-	SkyboxTextures = texture;
+    SkyboxTextures = texture;
+    SphericalHarmonicsTextures = sphericalHarmonics;
     SkyboxCubeMap = 0;
-    ConvolutedSkyboxCubeMap = 0;
     return m_scene_manager->addSkyBoxSceneNode(texture[0], texture[1],
                                                texture[2], texture[3],
                                                texture[4], texture[5]);
@@ -1181,11 +1199,11 @@ scene::ISceneNode *IrrDriver::addSkyBox(const std::vector<video::ITexture*>
 
 void IrrDriver::suppressSkyBox()
 {
-	SkyboxTextures.clear();
-    glDeleteTextures(1, &SkyboxCubeMap);
-    glDeleteTextures(1, &ConvolutedSkyboxCubeMap);
+    SkyboxTextures.clear();
+    SphericalHarmonicsTextures.clear();
+    if (SkyboxCubeMap)
+        glDeleteTextures(1, &SkyboxCubeMap);
     SkyboxCubeMap = 0;
-    ConvolutedSkyboxCubeMap = 0;
 }
 
 // ----------------------------------------------------------------------------
@@ -1235,6 +1253,74 @@ void IrrDriver::unsetTextureErrorMessage()
 {
     m_texture_error_message = "";
 }   // unsetTextureErrorMessage
+
+// ----------------------------------------------------------------------------
+/** Retrieve all textures in the specified directory, generate a smaller
+*   version for each of them and save them in the cache. Smaller textures are 
+*   generated only if they do not already exist or if their original version 
+*   is newer than the cached one.
+*   \param dir Directory from where textures will be retrieved.
+*              Must end with '/'.
+*   \return Directory where smaller textures were cached.
+*/
+std::string IrrDriver::generateSmallerTextures(const std::string& dir)
+{
+    std::set<std::string> files;
+    file_manager->listFiles(files, dir, true);
+
+    std::set<std::string>::const_iterator it;
+    for (it = files.begin(); it != files.end(); ++it)
+    {
+        std::string ext = StringUtils::toLowerCase(StringUtils::getExtension(*it));
+        if (ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "bmp")
+        {
+            getSmallerTexture(*it);
+        }
+    } // for it in files
+
+    return file_manager->getTextureCacheLocation(dir);
+} // generateSmallerTextures
+
+// ----------------------------------------------------------------------------
+/** Return the filename for the cached smaller version of the texture. Also,
+*   generate the smaller version of the texture if it does not already
+*   exist or if the original version is newer than the cached one.
+*   \param filename File name of the original texture.
+*   \return File name of the cached texture.
+*/
+std::string IrrDriver::getSmallerTexture(const std::string& filename)
+{
+    // Retrieve the filename of the cached texture
+    std::string cached_file = file_manager->getTextureCacheLocation(filename);
+
+    // If the cached texture does not exist, we generate it.
+    if (!file_manager->fileExists(cached_file) ||
+        file_manager->fileIsNewer(filename, cached_file))
+    {
+        video::IVideoDriver* video_driver = irr_driver->getVideoDriver();
+        video::IImage* img =
+            video_driver->createImageFromFile(filename.c_str());
+
+        if (img != NULL)
+        {
+            core::dimension2d<u32> dim = img->getDimension();
+            core::dimension2d<u32> new_dim; // Dimension of the cached texture
+            const int scale_factor = 2;
+            // Resize the texture only if it can be done properly
+            if (dim.Width < scale_factor || dim.Height < scale_factor)
+                new_dim = dim;
+            else
+                new_dim = dim / scale_factor;
+
+            video::IImage* scaled =
+                video_driver->createImage(img->getColorFormat(), new_dim);
+            img->copyToScaling(scaled);
+
+            video_driver->writeImageToFile(scaled, cached_file.c_str());
+        } // if img != NULL
+    } // if !file_manager->fileExists(cached_file)
+    return cached_file;
+} // getSmallerTexture
 
 // ----------------------------------------------------------------------------
 /** Loads a texture from a file and returns the texture object. This is just
@@ -1347,8 +1433,33 @@ video::ITexture *IrrDriver::getTexture(const std::string &filename,
         Log::error("irr_driver", "Texture '%s' not found.", filename.c_str());
     }
 
+    m_texturesFileName[out] = filename;
+
     return out;
 }   // getTexture
+
+// ----------------------------------------------------------------------------
+/** Clear the texture-filename reminder.
+*/
+void IrrDriver::clearTexturesFileName()
+{
+    m_texturesFileName.clear();
+} // clearTexturesFileName
+
+// ----------------------------------------------------------------------------
+/** Get the texture file name using a texture pointer.
+*   \param tex Pointer on the texture for which we want to find the file name.
+*   \return Filename of the texture if found, or an empty string otherwise.
+*/
+std::string IrrDriver::getTextureName(video::ITexture* tex)
+{
+    std::map<video::ITexture*, std::string>::iterator it;
+    it = m_texturesFileName.find(tex);
+    if (it != m_texturesFileName.end())
+        return it->second;
+    else
+        return "";
+} // getTextureName
 
 // ----------------------------------------------------------------------------
 /** Appends a pointer to each texture used in this mesh to the vector.
@@ -1516,11 +1627,11 @@ void IrrDriver::displayFPS()
 
     if (UserConfigParams::m_artist_debug_mode)
     {
-        sprintf(buffer, "FPS: %i/%i/%i - Objects (P1:%d P2:%d T:%d) KTris - LightDst : ~%d",
+        sprintf(buffer, "FPS: %i/%i/%i - Objects (P1:%d P2:%d T:%d) - LightDst : ~%d",
                 min, fps, max, object_count[SOLID_NORMAL_AND_DEPTH_PASS], object_count[SOLID_NORMAL_AND_DEPTH_PASS], object_count[TRANSPARENT_PASS], m_last_light_bucket_distance);
-		object_count[SOLID_NORMAL_AND_DEPTH_PASS] = 0;
-		object_count[SOLID_NORMAL_AND_DEPTH_PASS] = 0;
-		object_count[TRANSPARENT_PASS] = 0;
+        object_count[SOLID_NORMAL_AND_DEPTH_PASS] = 0;
+        object_count[SOLID_NORMAL_AND_DEPTH_PASS] = 0;
+        object_count[TRANSPARENT_PASS] = 0;
     }
     else
     {
@@ -1807,14 +1918,21 @@ void IrrDriver::update(float dt)
     World *world = World::getWorld();
 
     if (GUIEngine::getCurrentScreen() != NULL &&
-             GUIEngine::getCurrentScreen()->needs3D())
+        GUIEngine::getCurrentScreen()->needs3D() &&
+        world != NULL)
     {
         //printf("Screen that needs 3D\n");
-        m_video_driver->beginScene(/*backBuffer clear*/true, /*zBuffer*/true,
-                                   video::SColor(0,0,0,255));
-        m_scene_manager->drawAll();
+        //m_video_driver->beginScene(/*backBuffer clear*/true, /*zBuffer*/true,
+        //                           video::SColor(0,0,0,255));
+        //m_scene_manager->drawAll();
+
+        if (m_glsl)
+            renderGLSL(dt);
+        else
+            renderFixed(dt);
+
         GUIEngine::render(dt);
-        m_video_driver->endScene();
+        //m_video_driver->endScene();
         return;
     }
     else if (!world)
@@ -1832,6 +1950,16 @@ void IrrDriver::update(float dt)
         renderGLSL(dt);
     else
         renderFixed(dt);
+
+
+    if (world != NULL && world->getPhysics() != NULL)
+    {
+        IrrDebugDrawer* debug_drawer = world->getPhysics()->getDebugDrawer();
+        if (debug_drawer != NULL && debug_drawer->debugEnabled())
+        {
+            debug_drawer->beginNextFrame();
+        }
+    }
 
     if (m_request_screenshot) doScreenShot();
 
@@ -2017,7 +2145,7 @@ void IrrDriver::RTTProvider::setupRTTScene(PtrVector<scene::IMesh, REF>& mesh,
         m_rtt_main_node->getMaterial(n).SpecularColor.set(255,50,50,50);
         m_rtt_main_node->getMaterial(n).DiffuseColor.set(255,150,150,150);
 
-        m_rtt_main_node->getMaterial(n).setFlag(video::EMF_GOURAUD_SHADING , 
+        m_rtt_main_node->getMaterial(n).setFlag(video::EMF_GOURAUD_SHADING ,
                                                 true);
     }
 
@@ -2177,7 +2305,7 @@ void IrrDriver::applyObjectPassShader()
 
 // ----------------------------------------------------------------------------
 
-scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos, float energy,
+scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos, float energy, float radius,
     float r, float g, float b, bool sun, scene::ISceneNode* parent)
 {
     if (m_glsl)
@@ -2186,7 +2314,7 @@ scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos, float energy,
         LightNode *light = NULL;
 
         if (!sun)
-            light = new LightNode(m_scene_manager, parent, energy, r, g, b);
+            light = new LightNode(m_scene_manager, parent, energy, radius, r, g, b);
         else
             light = new SunNode(m_scene_manager, parent, r, g, b);
 
@@ -2216,7 +2344,7 @@ scene::ISceneNode *IrrDriver::addLight(const core::vector3df &pos, float energy,
     }
     else
     {
-		return m_scene_manager->addLightSceneNode(m_scene_manager->getRootSceneNode(),
+        return m_scene_manager->addLightSceneNode(m_scene_manager->getRootSceneNode(),
                                                   pos, video::SColorf(1.0f, r, g, b));
     }
 }

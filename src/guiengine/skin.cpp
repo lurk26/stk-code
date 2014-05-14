@@ -856,7 +856,7 @@ void Skin::drawRatingBar(Widget *w, const core::recti &rect,
         
         int step = ratingBar->getStepsOfStar(i);
         
-        const core::recti source_area(texture_w * step, 0, 
+        const core::recti source_area(texture_w * step, 0,
                                       texture_w * (step + 1), texture_h);
 
         draw2DImage(texture,
@@ -1222,33 +1222,28 @@ void Skin::drawSpinnerBody(const core::recti &rect, Widget* widget,
         }
     }
 
-    BoxRenderParams& params = (focused || pressed)
-                            ? SkinConfig::m_render_params["spinner::focused"]
-                            : SkinConfig::m_render_params["spinner::neutral"];
-
-    // defining a spinner widget to use the spinner widget class property(getBackgroundColor)
+    BoxRenderParams* params;
     SpinnerWidget* q = dynamic_cast<SpinnerWidget*>(widget);
     if(q->getUseBackgroundColor())
     {
         int player_id=q->getSpinnerWidgetPlayerID();
         if(player_id==0)
-            params=SkinConfig::m_render_params["spinner1::neutral"];
+            params=&SkinConfig::m_render_params["spinner1::neutral"];
         else if(player_id==1)
-            params=SkinConfig::m_render_params["spinner2::neutral"];
+            params=&SkinConfig::m_render_params["spinner2::neutral"];
         else if(player_id==2)
-            params=SkinConfig::m_render_params["spinner3::neutral"];
+            params=&SkinConfig::m_render_params["spinner3::neutral"];
         else if(player_id==3)
-            params=SkinConfig::m_render_params["spinner4::neutral"];
+            params=&SkinConfig::m_render_params["spinner4::neutral"];
     }
     else if (focused|| pressed)
     {
-        params=SkinConfig::m_render_params["spinner::focused"];
+        params=&SkinConfig::m_render_params["spinner::focused"];
     }
     else
     {
-        params=SkinConfig::m_render_params["spinner::neutral"];
+        params=&SkinConfig::m_render_params["spinner::neutral"];
     }
-
     if (widget->isFocusedForPlayer(0))
     {
         core::recti rect2 = rect;
@@ -1313,7 +1308,7 @@ void Skin::drawSpinnerBody(const core::recti &rect, Widget* widget,
                             - (int)center.Y)*texture_size);
     }
 
-    drawBoxFromStretchableTexture(widget, sized_rect, params,
+    drawBoxFromStretchableTexture(widget, sized_rect, *params,
                                   widget->m_deactivated);
 
 
@@ -1322,8 +1317,8 @@ void Skin::drawSpinnerBody(const core::recti &rect, Widget* widget,
     
     if (w->isGauge() && !w->m_deactivated)
     {
-        const int handle_size = (int)( widget->m_h*params.m_left_border
-                                 /(float)params.getImage()->getSize().Height );
+        const int handle_size = (int)( widget->m_h*params->m_left_border
+                                 /(float)params->getImage()->getSize().Height );
         const float value = (float)(w->getValue() - w->getMin())
                           / (w->getMax() - w->getMin());
 
@@ -2102,7 +2097,7 @@ void Skin::draw3DSunkenPane (IGUIElement *element, video::SColor bgcolor,
         core::recti innerArea = borderArea;
         innerArea.UpperLeftCorner += position2d< s32 >( 3, 3 );
         innerArea.LowerRightCorner -= position2d< s32 >( 3, 3 );
-		GL32_draw2DRectangle(focused ? bg_color_focused : bg_color, innerArea);
+        GL32_draw2DRectangle(focused ? bg_color_focused : bg_color, innerArea);
         return;
     }
     else if (type == WTYPE_LIST)
@@ -2166,7 +2161,7 @@ void Skin::drawBGFadeColor()
     SColor color = SkinConfig::m_colors["dialog_background::neutral"];
     if (m_dialog_size < 1.0f)
         color.setAlpha( (unsigned int)(color.getAlpha()*m_dialog_size ));
-	GL32_draw2DRectangle(color,
+    GL32_draw2DRectangle(color,
                                             core::recti(position2d< s32 >(0,0),
                        GUIEngine::getDriver()->getCurrentRenderTargetSize()) );
 }   // drawBGFadeColor
@@ -2182,7 +2177,8 @@ core::recti Skin::draw3DWindowBackground(IGUIElement *element,
 {
     if (ModalDialog::getCurrent() == NULL) return rect;
 
-    drawBGFadeColor();
+    if (ModalDialog::getCurrent()->fadeBackground())
+        drawBGFadeColor();
 
     // draw frame
     if (m_dialog_size < 1.0f)
@@ -2216,7 +2212,7 @@ void Skin::draw3DMenuPane (IGUIElement *element, const core::recti &rect,
                            const core::recti *clip)
 {
     SColor color = SColor(150, 96, 74, 196);
-	GL32_draw2DRectangle(color, rect);
+    GL32_draw2DRectangle(color, rect);
 }   // draw3DMenuPane
 
 // -----------------------------------------------------------------------------
@@ -2267,6 +2263,15 @@ void Skin::drawIcon (IGUIElement *element, EGUI_DEFAULT_ICON icon,
     // we won't let irrLicht decide when to call this, we draw them ourselves.
     /* m_fallback_skin->drawIcon(element, icon, position, starttime,
                                  currenttime, loop, clip); */
+}
+
+// -----------------------------------------------------------------------------
+
+void Skin::draw2DImage(const video::ITexture* texture, const core::rect<s32>& destRect,
+    const core::rect<s32>& sourceRect, const core::rect<s32>* clipRect,
+    const video::SColor* const colors, bool useAlphaChannelOfTexture)
+{
+    ::draw2DImage(texture, destRect, sourceRect, clipRect, colors, useAlphaChannelOfTexture);
 }
 
 // -----------------------------------------------------------------------------

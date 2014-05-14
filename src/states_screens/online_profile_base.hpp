@@ -48,7 +48,7 @@ protected:
     GUIEngine::IconButtonWidget * m_settings_tab;
 
     /** The profile that should be shown. */
-    Online::Profile *m_visiting_profile;
+    Online::OnlineProfile *m_visiting_profile;
 
 public:
 
@@ -57,7 +57,7 @@ public:
 
     /** \brief implement callback from parent class GUIEngine::Screen */
     virtual void eventCallback(GUIEngine::Widget* widget,
-                               const std::string& name, 
+                               const std::string& name,
                                const int playerID) OVERRIDE;
 
     /** \brief implement callback from parent class GUIEngine::Screen */

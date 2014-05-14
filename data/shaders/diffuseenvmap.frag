@@ -2,6 +2,7 @@ uniform float blueLmn[9];
 uniform float greenLmn[9];
 uniform float redLmn[9];
 uniform sampler2D ntex;
+uniform mat4 TransposeViewMatrix;
 
 #if __VERSION__ >= 130
 in vec2 uv;
@@ -13,12 +14,7 @@ varying vec2 uv;
 #define Spec gl_FragData[1]
 #endif
 
-vec3 DecodeNormal(vec2 n)
-{
-  float z = dot(n, n) * 2. - 1.;
-  vec2 xy = normalize(n) * sqrt(1. - z * z);
-  return vec3(xy,z);
-}
+vec3 DecodeNormal(vec2 n);
 
 mat4 getMatrix(float L[9])
 {
@@ -35,7 +31,9 @@ mat4 getMatrix(float L[9])
 void main(void)
 {
     vec3 normal = normalize(DecodeNormal(2. * texture(ntex, uv).xy - 1.));
-    vec4 extendednormal = vec4(normal, 1.);
+    // Convert normal in world space (where SH coordinates were computed)
+    vec4 extendednormal = TransposeViewMatrix * vec4(normal, 1.);
+    extendednormal.w = 1.;
     mat4 rmat = getMatrix(redLmn);
     mat4 gmat = getMatrix(greenLmn);
     mat4 bmat = getMatrix(blueLmn);
@@ -44,6 +42,6 @@ void main(void)
     float g = dot(extendednormal, gmat * extendednormal);
     float b = dot(extendednormal, bmat * extendednormal);
 
-    Diff = 0.25 * vec4(r, g, b, .1);
+    Diff = max(0.25 * vec4(r, g, b, .1), vec4(0.));
     Spec = vec4(0.);
 }

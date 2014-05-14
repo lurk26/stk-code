@@ -28,6 +28,7 @@
 #include "config/user_config.hpp"
 #include "graphics/camera.hpp"
 #include "graphics/CBatchingMesh.hpp"
+#include "graphics/glwrap.hpp"
 #include "graphics/irr_driver.hpp"
 #include "graphics/lod_node.hpp"
 #include "graphics/material_manager.hpp"
@@ -53,7 +54,7 @@
 #include "tracks/bezier_curve.hpp"
 #include "tracks/battle_graph.hpp"
 #include "tracks/check_manager.hpp"
-#include "tracks/lod_node_loader.hpp"
+#include "tracks/model_definition_loader.hpp"
 #include "tracks/track_manager.hpp"
 #include "tracks/quad_graph.hpp"
 #include "tracks/quad_set.hpp"
@@ -157,7 +158,7 @@ Track::~Track()
 unsigned int Track::getNumOfCompletedChallenges()
 {
     unsigned int unlocked_challenges = 0;
-    PlayerProfile *player = PlayerManager::get()->getCurrentPlayer();
+    PlayerProfile *player = PlayerManager::getCurrentPlayer();
     for (unsigned int i=0; i<m_challenges.size(); i++)
     {
         if (m_challenges[i].m_challenge_id == "tutorial")
@@ -208,6 +209,10 @@ void Track::cleanup()
     ItemManager::destroy();
 
     ParticleKindManager::get()->cleanUpTrackSpecificGfx();
+    // Clear reminder of transformed textures
+    resetTextureTable();
+    // Clear reminder of the link between textures and file names.
+    irr_driver->clearTexturesFileName();
 
     for(unsigned int i=0; i<m_animated_textures.size(); i++)
     {
@@ -287,6 +292,14 @@ void Track::cleanup()
     }
     m_sky_textures.clear();
 
+    for (unsigned int i = 0; i<m_spherical_harmonics_textures.size(); i++)
+    {
+        m_spherical_harmonics_textures[i]->drop();
+        if (m_spherical_harmonics_textures[i]->getReferenceCount() == 1)
+            irr_driver->removeTexture(m_spherical_harmonics_textures[i]);
+    }
+    m_spherical_harmonics_textures.clear();
+
     if(m_cache_track)
         material_manager->makeMaterialsPermanent();
     else
@@ -350,6 +363,8 @@ void Track::cleanup()
 //-----------------------------------------------------------------------------
 void Track::loadTrackInfo()
 {
+    irr_driver->setLwhite(1.);
+    irr_driver->setExposure(0.09);
     // Default values
     m_use_fog               = false;
     m_fog_max               = 1.0f;
@@ -443,21 +458,21 @@ void Track::loadTrackInfo()
     std::string dir = StringUtils::getPath(m_filename);
     std::string easter_name = dir+"/easter_eggs.xml";
 
-    XMLNode *easter = file_manager->createXMLTree(easter_name); 
+    XMLNode *easter = file_manager->createXMLTree(easter_name);
   
-    if(easter) 
+    if(easter)
     {
-        for(unsigned int i=0; i<easter->getNumNodes(); i++) 
-        { 
-            const XMLNode *eggs = easter->getNode(i); 
-            if(eggs->getNumNodes() > 0) 
-            { 
-                m_has_easter_eggs = true; 
-                break; 
-            } 
-        } 
+        for(unsigned int i=0; i<easter->getNumNodes(); i++)
+        {
+            const XMLNode *eggs = easter->getNode(i);
+            if(eggs->getNumNodes() > 0)
+            {
+                m_has_easter_eggs = true;
+                break;
+            }
+        }
         delete easter;
-    } 
+    }
 }   // loadTrackInfo
 
 //-----------------------------------------------------------------------------
@@ -827,7 +842,31 @@ bool Track::loadMainTrack(const XMLNode &root)
     std::string model_name;
     track_node->get("model", &model_name);
     std::string full_path = m_root+model_name;
-    scene::IMesh *mesh = irr_driver->getMesh(full_path);
+
+    scene::IMesh *mesh;
+    // If the hd texture option is disabled, we generate smaller textures
+    // and configure the path to them before loading the mesh.
+    if (!UserConfigParams::m_high_definition_textures)
+    {
+        std::string cached_textures_dir =
+            irr_driver->generateSmallerTextures(m_root);
+
+        irr::io::IAttributes* scene_params =
+            irr_driver->getSceneManager()->getParameters();
+        // Before changing the texture path, we retrieve the older one to restore it later
+        std::string texture_default_path =
+            scene_params->getAttributeAsString(scene::B3D_TEXTURE_PATH).c_str();
+        scene_params->setAttribute(scene::B3D_TEXTURE_PATH, cached_textures_dir.c_str());
+
+        mesh = irr_driver->getMesh(full_path);
+
+        scene_params->setAttribute(scene::B3D_TEXTURE_PATH, texture_default_path.c_str());
+    }
+    else // Load mesh with default (hd) textures
+    {
+        mesh = irr_driver->getMesh(full_path);
+    }
+    
     if(!mesh)
     {
         Log::fatal("track",
@@ -847,17 +886,21 @@ bool Track::loadMainTrack(const XMLNode &root)
     merged_mesh->addMesh(mesh);
     merged_mesh->finalize();
 
-    adjustForFog(merged_mesh, NULL);
+    scene::IMeshManipulator* manip = irr_driver->getVideoDriver()->getMeshManipulator();
+    // TODO: memory leak?
+    scene::IMesh* tangent_mesh = manip->createMeshWithTangents(merged_mesh);
+
+    adjustForFog(tangent_mesh, NULL);
 
     // The merged mesh is grabbed by the octtree, so we don't need
     // to keep a reference to it.
-    scene::ISceneNode *scene_node = irr_driver->addMesh(merged_mesh);
+    scene::ISceneNode *scene_node = irr_driver->addMesh(tangent_mesh);
     //scene::IMeshSceneNode *scene_node = irr_driver->addOctTree(merged_mesh);
     // We should drop the merged mesh (since it's now referred to in the
     // scene node), but then we need to grab it since it's in the
     // m_all_cached_meshes.
-    m_all_cached_meshes.push_back(merged_mesh);
-    irr_driver->grabAllTextures(merged_mesh);
+    m_all_cached_meshes.push_back(tangent_mesh);
+    irr_driver->grabAllTextures(tangent_mesh);
 
     // The reference count of the mesh is 1, since it is in irrlicht's
     // cache. So we only have to remove it from the cache.
@@ -888,7 +931,7 @@ bool Track::loadMainTrack(const XMLNode &root)
     m_aabb_max.setY(m_aabb_max.getY()+30.0f);
     World::getWorld()->getPhysics()->init(m_aabb_min, m_aabb_max);
 
-    LodNodeLoader lodLoader(this);
+    ModelDefinitionLoader lodLoader(this);
 
     // Load LOD groups
     const XMLNode *lod_xml_node = root.getNode("lod");
@@ -899,7 +942,21 @@ bool Track::loadMainTrack(const XMLNode &root)
             const XMLNode* lod_group_xml = lod_xml_node->getNode(i);
             for (unsigned int j = 0; j < lod_group_xml->getNumNodes(); j++)
             {
-                lodLoader.addLODModelDefinition(lod_group_xml->getNode(j));
+                lodLoader.addModelDefinition(lod_group_xml->getNode(j));
+            }
+        }
+    }
+
+    // Load instancing models (for the moment they are loaded the same way as LOD to simplify implementation)
+    const XMLNode *instancing_xml_node = root.getNode("instancing");
+    if (instancing_xml_node != NULL)
+    {
+        for (unsigned int i = 0; i < instancing_xml_node->getNumNodes(); i++)
+        {
+            const XMLNode* lod_group_xml = instancing_xml_node->getNode(i);
+            for (unsigned int j = 0; j < lod_group_xml->getNumNodes(); j++)
+            {
+                lodLoader.addModelDefinition(lod_group_xml->getNode(j));
             }
         }
     }
@@ -965,7 +1022,7 @@ bool Track::loadMainTrack(const XMLNode &root)
             }
 
             const unsigned int val = challenge->getNumTrophies();
-            bool shown = (PlayerManager::get()->getCurrentPlayer()->getPoints() < val);
+            bool shown = (PlayerManager::getCurrentPlayer()->getPoints() < val);
             m_force_fields.push_back(OverworldForceField(xyz, shown, val));
 
             m_challenges[closest_challenge_id].setForceField(
@@ -977,7 +1034,7 @@ bool Track::loadMainTrack(const XMLNode &root)
 
             assert(GUIEngine::getHighresDigitFont() != NULL);
 
-			// TODO: Add support in the engine for BillboardText or find a replacement
+            // TODO: Add support in the engine for BillboardText or find a replacement
 /*          scene::ISceneManager* sm = irr_driver->getSceneManager();
             scene::ISceneNode* sn =
                 sm->addBillboardTextSceneNode(GUIEngine::getHighresDigitFont(),
@@ -986,7 +1043,7 @@ bool Track::loadMainTrack(const XMLNode &root)
                                               core::dimension2df(textsize.Width/45.0f,
                                                                  textsize.Height/45.0f),
                                               xyz,
-                                              -1, // id 
+                                              -1, // id
                                               video::SColor(255, 255, 225, 0),
                                               video::SColor(255, 255, 89, 0));
             m_all_nodes.push_back(sn);*/
@@ -1083,7 +1140,7 @@ bool Track::loadMainTrack(const XMLNode &root)
         }
         else if (lod_instance)
         {
-            LODNode* node = lodLoader.instanciate(n, NULL);
+            LODNode* node = lodLoader.instanciateAsLOD(n, NULL);
             if (node != NULL)
             {
                 node->setPosition(xyz);
@@ -1308,7 +1365,7 @@ void Track::handleExplosion(const Vec3 &pos, const PhysicalObject *obj,
 }   // handleExplosion
 
 // ----------------------------------------------------------------------------
-/** Creates a water node.
+/** Creates a water node. OBSOLETE, kept for backwards compat only
  *  \param node The XML node containing the specifications for the water node.
  */
 void Track::createWater(const XMLNode &node)
@@ -1318,8 +1375,13 @@ void Track::createWater(const XMLNode &node)
     std::string full_path = m_root+model_name;
 
     scene::IMesh *mesh = irr_driver->getMesh(full_path);
-    if (mesh == NULL) return;
+    if (mesh == NULL)
+    {
+        Log::warn("Track", "Water not found : '%s'", full_path.c_str());
+        return;
+    }
 
+    /*
     float wave_height  = 2.0f;
     float wave_speed   = 300.0f;
     float wave_length  = 10.0f;
@@ -1341,11 +1403,12 @@ void Track::createWater(const XMLNode &node)
         wave_speed =300.0f;
     }
     node.get("length", &wave_length);
+    */
     scene::ISceneNode* scene_node = NULL;
-
+    /*
     if (UserConfigParams::m_graphical_effects)
     {
-        /*scene::IMesh *welded;
+        scene::IMesh *welded;
         scene_node = irr_driver->addWaterNode(mesh, &welded,
                                               wave_height,
                                               wave_speed,
@@ -1355,12 +1418,12 @@ void Track::createWater(const XMLNode &node)
         irr_driver->grabAllTextures(mesh);
         m_all_cached_meshes.push_back(mesh);
 
-        mesh = welded;*/
+        mesh = welded;
     }
     else
-    {
+    {*/
         scene_node = irr_driver->addMesh(mesh);
-    }
+    //}
 
     if(!mesh || !scene_node)
     {
@@ -1444,6 +1507,15 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     // Add the track directory to the texture search path
     file_manager->pushTextureSearchPath(m_root);
     file_manager->pushModelSearchPath  (m_root);
+
+    // If the hd texture option is disabled, we generate smaller textures
+    // and we also add the cache directory to the texture search path
+    if (!UserConfigParams::m_high_definition_textures)
+    {
+        std::string cached_textures_dir =
+            irr_driver->generateSmallerTextures(m_root);
+        file_manager->pushTextureSearchPath(cached_textures_dir);
+    }
 
     // First read the temporary materials.xml file if it exists
     try
@@ -1533,7 +1605,7 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     loadMainTrack(*root);
     unsigned int main_track_count = m_all_nodes.size();
 
-    LodNodeLoader lod_loader(this);
+    ModelDefinitionLoader model_def_loader(this);
 
     // Load LOD groups
     const XMLNode *lod_xml_node = root->getNode("lod");
@@ -1544,13 +1616,27 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
             const XMLNode* lod_group_xml = lod_xml_node->getNode(i);
             for (unsigned int j = 0; j < lod_group_xml->getNumNodes(); j++)
             {
-                lod_loader.addLODModelDefinition(lod_group_xml->getNode(j));
+                model_def_loader.addModelDefinition(lod_group_xml->getNode(j));
+            }
+        }
+    }
+
+    // Load instancing models (for the moment they are loaded the same way as LOD to simplify implementation)
+    const XMLNode *instancing_xml_node = root->getNode("instancing");
+    if (instancing_xml_node != NULL)
+    {
+        for (unsigned int i = 0; i < instancing_xml_node->getNumNodes(); i++)
+        {
+            const XMLNode* lod_group_xml = instancing_xml_node->getNode(i);
+            for (unsigned int j = 0; j < lod_group_xml->getNumNodes(); j++)
+            {
+                model_def_loader.addModelDefinition(lod_group_xml->getNode(j));
             }
         }
     }
 
     std::map<std::string, XMLNode*> library_nodes;
-    loadObjects(root, path, lod_loader, true, NULL, library_nodes);
+    loadObjects(root, path, model_def_loader, true, NULL, library_nodes);
 
     // Cleanup library nodes
     for (std::map<std::string, XMLNode*>::iterator it = library_nodes.begin();
@@ -1590,7 +1676,7 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
 
     // Sky dome and boxes support
     // --------------------------
-	irr_driver->suppressSkyBox();
+    irr_driver->suppressSkyBox();
     if(m_sky_type==SKY_DOME && m_sky_textures.size() > 0)
     {
         scene::ISceneNode *node = irr_driver->addSkyDome(m_sky_textures[0],
@@ -1614,14 +1700,20 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     }
     else if(m_sky_type==SKY_BOX && m_sky_textures.size() == 6)
     {
-        m_all_nodes.push_back(irr_driver->addSkyBox(m_sky_textures));
+        //if (m_spherical_harmonics_textures.size() > 0)
+            m_all_nodes.push_back(irr_driver->addSkyBox(m_sky_textures, m_spherical_harmonics_textures));
+        //else
+        //    m_all_nodes.push_back(irr_driver->addSkyBox(m_sky_textures, m_sky_textures));
     }
     else if(m_sky_type==SKY_COLOR)
     {
         World::getWorld()->setClearbackBufferColor(m_sky_color);
     }
 
-
+    if (!UserConfigParams::m_high_definition_textures)
+    {
+        file_manager->popTextureSearchPath();
+    }
     file_manager->popTextureSearchPath();
     file_manager->popModelSearchPath  ();
 
@@ -1636,7 +1728,7 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     }
 
     const video::SColorf tmpf(m_sun_diffuse_color);
-    m_sun = irr_driver->addLight(m_sun_position, 0., tmpf.r, tmpf.g, tmpf.b, true);
+    m_sun = irr_driver->addLight(m_sun_position, 0., 0., tmpf.r, tmpf.g, tmpf.b, true);
 
     if (!irr_driver->isGLSL())
     {
@@ -1736,7 +1828,7 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
 
 //-----------------------------------------------------------------------------
 
-void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoader& lod_loader,
+void Track::loadObjects(const XMLNode* root, const std::string& path, ModelDefinitionLoader& model_def_loader,
                         bool create_lod_definitions, scene::ISceneNode* parent,
                         std::map<std::string, XMLNode*>& library_nodes)
 {
@@ -1752,7 +1844,7 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
         if (name == "track" || name == "default-start") continue;
         if (name == "object")
         {
-            m_track_object_manager->add(*node, parent, lod_loader);
+            m_track_object_manager->add(*node, parent, model_def_loader);
         }
         else if (name == "library")
         {
@@ -1797,7 +1889,21 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
                         const XMLNode* lod_group_xml = lod_xml_node->getNode(i);
                         for (unsigned int j = 0; j < lod_group_xml->getNumNodes(); j++)
                         {
-                            lod_loader.addLODModelDefinition(lod_group_xml->getNode(j));
+                            model_def_loader.addModelDefinition(lod_group_xml->getNode(j));
+                        }
+                    }
+                }
+
+                // Load instancing definitions
+                const XMLNode *instancing_xml_node = libroot->getNode("instancing");
+                if (instancing_xml_node != NULL)
+                {
+                    for (unsigned int i = 0; i < instancing_xml_node->getNumNodes(); i++)
+                    {
+                        const XMLNode* instancing_group_xml = instancing_xml_node->getNode(i);
+                        for (unsigned int j = 0; j < instancing_group_xml->getNumNodes(); j++)
+                        {
+                            model_def_loader.addModelDefinition(instancing_group_xml->getNode(j));
                         }
                     }
                 }
@@ -1813,7 +1919,7 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
             parent->setRotation(hpr);
             parent->setScale(scale);
             parent->updateAbsolutePosition();
-            loadObjects(libroot, lib_path, lod_loader, create_lod_definitions, parent, library_nodes);
+            loadObjects(libroot, lib_path, model_def_loader, create_lod_definitions, parent, library_nodes);
         }
         else if (name == "water")
         {
@@ -1857,7 +1963,7 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
         {
             if (UserConfigParams::m_graphical_effects)
             {
-                m_track_object_manager->add(*node, parent, lod_loader);
+                m_track_object_manager->add(*node, parent, model_def_loader);
             }
         }
         else if (name == "sky-dome" || name == "sky-box" || name == "sky-color")
@@ -1870,7 +1976,7 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
         }
         else if (name == "light")
         {
-            m_track_object_manager->add(*node, parent, lod_loader);
+            m_track_object_manager->add(*node, parent, model_def_loader);
         }
         else if (name == "weather")
         {
@@ -1907,6 +2013,10 @@ void Track::loadObjects(const XMLNode* root, const std::string& path, LodNodeLoa
             // handled above
         }
         else if (name == "lod")
+        {
+            // handled above
+        }
+        else if (name == "instancing")
         {
             // handled above
         }
@@ -2068,6 +2178,24 @@ void Track::handleSky(const XMLNode &xml_node, const std::string &filename)
         {
             m_sky_type = SKY_BOX;
         }
+
+        std::string sh_textures;
+        xml_node.get("sh-texture", &sh_textures);
+        v = StringUtils::split(sh_textures, ' ');
+        for (unsigned int i = 0; i<v.size(); i++)
+        {
+            video::ITexture *t = irr_driver->getTexture(v[i]);
+            if (t)
+            {
+                t->grab();
+                m_spherical_harmonics_textures.push_back(t);
+            }
+            else
+            {
+                Log::error("track", "Sky-box spherical harmonics texture '%s' not found - ignored.",
+                    v[i].c_str());
+            }
+        }   // for i<v.size()
     }
     else if (xml_node.getName() == "sky-color")
     {

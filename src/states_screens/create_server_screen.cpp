@@ -21,6 +21,7 @@
 
 #include "audio/sfx_manager.hpp"
 #include "challenges/unlock_manager.hpp"
+#include "config/player_manager.hpp"
 #include "modes/demo_world.hpp"
 #include "online/servers_manager.hpp"
 #include "online/messages.hpp"
@@ -57,7 +58,7 @@ void CreateServerScreen::loadedFromFile()
 
     m_name_widget = getWidget<TextBoxWidget>("name");
     assert(m_name_widget != NULL);
-    m_name_widget->setText(CurrentUser::get()->getUserName() + _("'s server"));
+    m_name_widget->setText(PlayerManager::getCurrentOnlineUserName() + _("'s server"));
     m_max_players_widget = getWidget<SpinnerWidget>("max_players");
     assert(m_max_players_widget != NULL);
     m_max_players_widget->setValue(8);
@@ -136,15 +137,31 @@ void CreateServerScreen::serverCreationRequest()
     }
     else
     {
-        //m_options_widget->setDeactivated();
-        m_server_creation_request = Online::CurrentUser::get()->requestServerCreation(name, max_players);
+
+        m_server_creation_request = new ServerCreationRequest();
+        PlayerManager::setUserDetails(m_server_creation_request,"create_server");
+        m_server_creation_request->addParameter("name", name);
+        m_server_creation_request->addParameter("max_players", max_players);
+        m_server_creation_request->queue();
+
         return;
     }
     sfx_manager->quickSound("anvil");
 }
+// --------------------------------------------------------------------
+void CreateServerScreen::ServerCreationRequest::callback()
+{
+    if (isSuccess())
+    {
+        Server *server = new Server(*getXMLData()->getNode("server"));
+        ServersManager::get()->addServer(server);
+        m_created_server_id = server->getServerId();
+    }   // isSuccess
+}   // callback
 
 // ----------------------------------------------------------------------------
-void CreateServerScreen::eventCallback(Widget* widget, const std::string& name, const int playerID)
+void CreateServerScreen::eventCallback(Widget* widget, const std::string& name,
+                                       const int playerID)
 {
     if (name == m_options_widget->m_properties[PROP_ID])
     {
