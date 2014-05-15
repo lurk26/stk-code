@@ -1541,10 +1541,10 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     // the information about the size of the texture to render the mini
     // map to.
     if (!m_is_arena && !m_is_soccer && !m_is_cutscene) loadQuadGraph(mode_id, reverse_track);
-    
+
 
     ItemManager::create();
-	
+
     // Set the default start positions. Node that later the default
     // positions can still be overwritten.
     float forwards_distance  = 1.5f;
@@ -1822,8 +1822,6 @@ void Track::loadTrackModel(bool reverse_track, unsigned int mode_id)
     }
 
     irr_driver->unsetTextureErrorMessage();
-
-	
 }   // loadTrackModel
 
 //-----------------------------------------------------------------------------

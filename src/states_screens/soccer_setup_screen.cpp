@@ -198,14 +198,15 @@ void SoccerSetupScreen::init()
     m_schedule_continue = false;
 
     Screen::init();
-
-    // TODO: remember in config.xml the last number of goals
+    
+    if (UserConfigParams::m_num_goals <= 0)
+        UserConfigParams::m_num_goals = 3;
         
     if (UserConfigParams::m_soccer_time_limit <= 0)
         UserConfigParams::m_soccer_time_limit = 3;
 
     SpinnerWidget*  goalamount = getWidget<SpinnerWidget>("goalamount");
-    goalamount->setValue(3);
+    goalamount->setValue(UserConfigParams::m_num_goals);
     goalamount->setActivated();
 
     SpinnerWidget* timeAmount = getWidget<SpinnerWidget>("timeamount");
@@ -221,6 +222,11 @@ void SoccerSetupScreen::init()
 
     // We need players to be able to choose their teams
     input_manager->setMasterPlayerOnly(false);
+
+    // This flag will cause that a 'fire' event will be mapped to 'select' (if
+    // 'fire' is not assigned to a GUI event). This is done to support the old
+    // way of player joining by pressing 'fire' instead of 'select'.
+    input_manager->getDeviceList()->mapFireToSelect(true);
 }   // init
 
 // -----------------------------------------------------------------------------
@@ -228,7 +234,12 @@ void SoccerSetupScreen::tearDown()
 {
     Widget* central_div = getWidget<Widget>("central_div");
 
+    // Reset the 'map fire to select' option of the device manager
+    input_manager->getDeviceList()->mapFireToSelect(false);
+    
+    UserConfigParams::m_num_goals = getWidget<SpinnerWidget>("goalamount")->getValue();
     UserConfigParams::m_soccer_time_limit = getWidget<SpinnerWidget>("timeamount")->getValue();
+
     // Remove all ModelViewWidgets we created manually
     PtrVector<Widget>&  children = central_div->getChildren();
     for(int i = children.size()-1 ; i >= 0 ; i--)
